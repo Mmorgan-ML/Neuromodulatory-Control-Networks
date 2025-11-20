@@ -25,6 +25,7 @@ This is an older version of the architecture without multi-head attention. This 
 <img width="1200" height="700" alt="Figure_2 500 step" src="https://github.com/user-attachments/assets/2fdbc15f-2e93-45ad-9c41-cfc35b4d1bcc" />
 
 This is the current architecture undergoing its first training run. Not only is it now averaging 1970 tokens/s, but according to analysis of perplexity drops from the log file, it seems to be better at converging. Additional training is required, along with validation perplexity scores, to confirm its feasibility.
-<img width="3600" height="2100" alt="smoothed_perplexity_plot" src="https://github.com/user-attachments/assets/ace50223-4003-493d-8481-dd3dc3f4572e" />
+<img width="3600" height="2100" alt="smoothed_perplexity_plot" src="https://github.com/user-attachments/assets/e5e93358-cad7-4987-a0f0-4c2ac2da1f32" />
+
 
 
