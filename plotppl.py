@@ -10,7 +10,7 @@ import matplotlib.ticker as mticker
 log_file = "training.log" 
 # The window size for the rolling average. A larger value means a smoother line.
 # 50-100 is usually a good range to start with.
-SMOOTHING_WINDOW = 500
+SMOOTHING_WINDOW = 5000
 # ---------------------
 
 # Your original regex pattern is correct and preserved
@@ -87,4 +87,5 @@ plt.savefig(output_filename, dpi=300)
 print(f"Saved smoothed plot as '{output_filename}'")
 
 # Also display the plot
+
 plt.show()
