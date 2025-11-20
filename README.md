@@ -13,7 +13,7 @@ Use the --total_tokens argument after counting tokens in your training set once 
 
 # Creation of the Validation Set
 ## First Run
-When you first run the NCN architecture using the train.py script, it will create a tokenized validation set with the default name tokenized_val_data.pt. This is time consuming.
+When you first run the NCN architecture using the train.py script, it will create a tokenized validation set using the files in the training_data directory with the default name tokenized_val_data.pt. This is time consuming.
 
 ## Starting a New Run or Resuming a Run using the same Training Set
 As creating a new tokenized_val_data.pt file is time and resource expensive, if you start a new run or resume an old training run with the same training set, you may keep the tokenized_val_data.pt file and reuse it, saving significant time.
