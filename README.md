@@ -17,3 +17,14 @@ When you first run the NCN architecture using the train.py script, it will creat
 
 ## Starting a New Run or Resuming a Run using the same Training Set
 As creating a new tokenized_val_data.pt file is time and resource expensive, if you start a new run or resume an old training run with the same training set, you may keep the tokenized_val_data.pt file and reuse it, saving significant time.
+
+# Current Progress / Work
+Tests are currently being performed training a 31M parameter model on 4.4GB of .txt files. We are very compute constrained, so this will take quite a while. We ask the community to help in validating the architecture and the role the NCN plays in modulating the main LLM. Here are some pictures of the perplexity falling over the course of training.
+
+This is an older version of the architecture without multi-head attention. This architecture, training on a GTX 1650, was averaging 1760 tokens/s. After one epoch of training, it had a Final interval Loss: 2.4735 and PPL: 11.86, along with Avg Validation Loss: 2.2904 | Perplexity: 9.8792. This version has since become deprecated.
+<img width="1200" height="700" alt="Figure_2 500 step" src="https://github.com/user-attachments/assets/2fdbc15f-2e93-45ad-9c41-cfc35b4d1bcc" />
+
+This is the current architecture undergoing its first training run. Not only is it now averaging 1970 tokens/s, but according to analysis of perplexity drops from the log file, it seems to be better at converging. Additional training is required, along with validation perplexity scores, to confirm its feasibility.
+<img width="3600" height="2100" alt="smoothed_perplexity_plot" src="https://github.com/user-attachments/assets/ace50223-4003-493d-8481-dd3dc3f4572e" />
+
+
