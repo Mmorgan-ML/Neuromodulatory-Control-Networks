@@ -24,7 +24,7 @@ Tests are currently being performed training a 31M parameter model on 4.4GB of .
 This is an older version of the architecture without multi-head attention. This architecture, training on a GTX 1650, was averaging 1760 tokens/s. After one epoch of training, it had a Final interval Loss: 2.4735 and PPL: 11.86, along with Avg Validation Loss: 2.2904 | Perplexity: 9.8792. This version has since become deprecated.
 <img width="1200" height="700" alt="Figure_2 500 step" src="https://github.com/user-attachments/assets/2fdbc15f-2e93-45ad-9c41-cfc35b4d1bcc" />
 
-This is the current architecture undergoing its first training run. Not only is it now averaging 1970 tokens/s, but according to analysis of perplexity drops from the log file, it seems to be better at converging. Additional training is required, along with validation perplexity scores, to confirm its feasibility.
+This is the current architecture undergoing its first training run. Not only is it now averaging 1970 tokens/s, but according to analysis of perplexity drops from the log file, it seems to be better at converging. Additional training is required, along with validation perplexity scores, to confirm its feasibility. This run has finished its first epoch. Final interval Loss: 2.5449, PPL: 12.74 and Avg Loss: 2.1264 | Perplexity: 8.3846 
 <img width="3600" height="2100" alt="smoothed_perplexity_plot" src="https://github.com/user-attachments/assets/e3c82373-6fb0-46a4-b493-6c7443c7686a" />
 
 
