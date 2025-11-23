@@ -6,10 +6,10 @@ The Neuromodulatory Control Network architecture operates by running a compact n
 
 # Example Commands to use the NCN architecture
 ## Example of Starting a Training Run
-python train.py --d_model 384 --n_layer 6 --n_head 6 --ncn_heads 4 --num_epochs 30 --batch_size 4 --block_size 1024 --lr 3e-4 --total_tokens 313228872 --use_amp --checkpoint_frequency 2000 --log_frequency 50 --num_workers auto
+python train.py --d_model 384 --n_layer 6 --n_head 6 --ncn_heads 4 --num_epochs 30 --batch_size 4 --gradient_accumulation_steps 16 --block_size 1024 --lr 3e-4 --total_tokens 313228872 --use_amp --checkpoint_frequency 1000 --log_frequency 50 --num_workers auto
 
 ## Example of Resuming a Checkpoint
-python train.py --resume_checkpoint ncn_checkpoints/checkpoint_step_76000.pt --num_epochs 30 --batch_size 8 --total_tokens 313228872 --use_amp --checkpoint_frequency 2000 --log_frequency 50
+python train.py --resume_checkpoint ncn_checkpoints/checkpoint_step_76000.pt --num_epochs 30 --batch_size 4 --gradient_accumulation_steps 16 --total_tokens 313228872 --use_amp --checkpoint_frequency 1000 --log_frequency 50
 
 ## What is the --total_tokens Argument?
 Use the --total_tokens argument after counting tokens in your training set once so you don't have to waste time recounting tokens every time you start a new training run or resume training a checkpoint.
