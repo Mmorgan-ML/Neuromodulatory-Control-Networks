@@ -68,6 +68,10 @@ class NeuromodulatoryControlNetwork(nn.Module):
         # This enables layer-specific control vectors.
         self.layer2 = nn.Linear(self.hidden_dim, config.ncn_output_dim)
 
+        # --- Initialization Stability Protocol ---
+        # Initialize output biases to ensure neutral identity state at t=0
+        self._init_output_biases()
+
         # Get NCN internal activation function
         activation_name = config.ncn_activation_fn.lower()
         self.activation = _NCN_ACTIVATION_FUNCTIONS.get(activation_name)
@@ -90,6 +94,32 @@ class NeuromodulatoryControlNetwork(nn.Module):
             else:
                  raise ValueError(f"Unknown modulation signal name '{name}' specified in config.")
 
+    def _init_output_biases(self):
+        """
+        Initializes the biases of the final output layer to ensure the NCN starts
+        in a neutral identity state (Mitigates Entropy Shock & Metabolic Throttling).
+        """
+        with torch.no_grad():
+            # Reset all biases to 0.0 first (Standard)
+            self.layer2.bias.zero_()
+            
+            # Create a view that shares memory with the actual bias tensor.
+            # Shape matches the reshaping logic in forward(): (Batch, Seq, NumLayers, NumSignals)
+            # The linear layer outputs flattened (NumLayers * NumSignals).
+            bias_view = self.layer2.bias.view(self.num_layers, self.num_mod_signals)
+
+            for i, name in enumerate(self.signal_names):
+                if name == "precision":
+                    # Target: Beta = 1.0 (Standard Attention)
+                    # Beta = Softplus(b) + 0.01
+                    # 1.0 = ln(1 + e^b) + 0.01 -> b ~= 0.525
+                    bias_view[:, i].fill_(0.525)
+                elif name == "ffn_gate":
+                    # Target: Gamma ~= 0.95 (Mostly Open)
+                    # Gamma = Sigmoid(b)
+                    # 0.95 = 1 / (1 + e^-b) -> b ~= 2.94 -> Round to 3.0
+                    bias_view[:, i].fill_(3.0)
+                # "gain" naturally targets 1.0 at b=0.0 (Sigmoid(0) + 0.5 = 1.0), so no update needed.
 
     def forward(
         self, 
