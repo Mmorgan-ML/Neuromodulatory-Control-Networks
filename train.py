@@ -309,6 +309,7 @@ def parse_arguments():
     # Training Params
     parser.add_argument('--num_epochs', type=int, required=True, help="Total training epochs.")
     parser.add_argument('--batch_size', type=int, default=8, help="Batch size per device.")
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1, help="Number of steps to accumulate gradients before update.")
     parser.add_argument('--lr', type=float, default=3e-4, help="Learning rate.")
     parser.add_argument('--weight_decay', type=float, default=0.1, help="AdamW weight decay.")
     parser.add_argument('--adam_betas', type=lambda s: tuple(map(float, s.split(','))), default=(0.9, 0.95), help="AdamW betas (e.g., 0.9,0.95).")
@@ -514,14 +515,30 @@ def main():
         logger.info(f"  Total Parameters: {format_param_count(total_params)}"); logger.info(f"  Trainable Parameters: {format_param_count(trainable_params)}")
         logger.info("---------------------------\n")
 
-    effective_batch_size = args.batch_size * world_size; steps_per_epoch_approx = 0
-    if total_tokens_in_dataset and total_tokens_in_dataset > 0 and args.block_size > 0: total_sequences_approx = total_tokens_in_dataset // args.block_size
-    else: total_sequences_approx = 0
-    if total_sequences_approx and effective_batch_size > 0: steps_per_epoch_approx = max(1, math.ceil(total_sequences_approx / effective_batch_size))
-    if is_master: logger.info(f"Final effective BS: {effective_batch_size}, Estimated steps/epoch: ~{steps_per_epoch_approx or 'N/A'}")
+    # --- PROGRESS BAR CALCULATIONS (ROBUST) ---
+    # We calculate totals based on micro-batches (what the loop sees) 
+    # vs optimizer steps (what the human wants to see).
+    
+    total_micro_batches = None
+    total_optim_steps = 0
+    
+    if total_tokens_in_dataset and total_tokens_in_dataset > 0 and args.block_size > 0:
+        total_sequences = total_tokens_in_dataset // args.block_size
+        # The loop runs this many times (Micro Batches)
+        total_micro_batches = max(1, math.ceil(total_sequences / args.batch_size))
+        # The optimizer steps this many times
+        effective_batch_size = args.batch_size * world_size * args.gradient_accumulation_steps
+        total_optim_steps = math.ceil(total_tokens_in_dataset / (args.block_size * effective_batch_size))
+    
+    if is_master: 
+        logger.info(f"Total Micro-Batches per Epoch: {total_micro_batches}")
+        logger.info(f"Total Optimizer Steps per Epoch: {total_optim_steps}")
 
-    remaining_epochs = args.num_epochs - start_epoch; total_training_steps = steps_per_epoch_approx * remaining_epochs if steps_per_epoch_approx > 0 else 1_000_000
-    scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=max(1, total_training_steps))
+    remaining_epochs = args.num_epochs - start_epoch; 
+    # For scheduler, we need total OPTIMIZER steps
+    scheduler_total_steps = total_optim_steps * remaining_epochs if total_optim_steps > 0 else 1_000_000
+    
+    scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=max(1, scheduler_total_steps))
     if args.resume_checkpoint and ckpt_path_str != "NOT_FOUND" and ckpt_path_str is not None:
         try:
             checkpoint_sched = torch.load(ckpt_path_str, map_location=device, weights_only=False)
@@ -558,6 +575,9 @@ def main():
     if is_master: logger.info(f"--- Starting Training: Epochs {start_epoch+1} to {args.num_epochs} ---")
     tokens_processed_session = 0; cumulative_loss_since_log = 0.0; steps_since_log = 0; script_start_time = time.time()
 
+    # Ensure gradients are zero before starting the loop
+    if optimizer is not None: optimizer.zero_grad()
+
     for epoch in range(start_epoch, args.num_epochs):
         epoch_iter_start_time = time.time(); logger.info(f"\n--- Epoch {epoch + 1}/{args.num_epochs} ---") if is_master else None; model.train()
         current_epoch_files = train_files[:]; random.shuffle(current_epoch_files)
@@ -565,15 +585,33 @@ def main():
         if skip_sequences > 0 and is_master: logger.info(f"Resuming Epoch {epoch+1}. Skipping {skip_sequences} sequences.")
         train_dataset = MultiFileTextDataset(current_epoch_files, tokenizer, args.block_size, skip_sequences)
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.num_workers, collate_fn=collate_fn)
-        initial_display = (global_step % steps_per_epoch_approx) if epoch == start_epoch and args.resume_checkpoint and steps_per_epoch_approx > 0 else 0
-        epoch_iterator = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.num_epochs}", unit="batch", total=steps_per_epoch_approx or None, initial=initial_display, disable=(not is_master), leave=True)
+        
+        # --- ROBUST TQDM INITIALIZATION ---
+        # We track MICRO-BATCHES so the bar moves smoothly and correctly based on file processing.
+        # We adjust 'initial' if we skipped sequences during resume.
+        initial_micro_batches = 0
+        if skip_sequences > 0:
+            initial_micro_batches = skip_sequences // args.batch_size
+
+        epoch_iterator = tqdm(
+            train_loader, 
+            desc=f"Ep {epoch+1}", 
+            unit="batch", 
+            total=total_micro_batches, # The physical loop count
+            initial=initial_micro_batches,
+            disable=(not is_master), 
+            leave=True
+        )
+        
         sequences_processed_epoch_run = 0
 
         for batch_idx, batch_data in enumerate(epoch_iterator):
             batch_start_time = time.time(); batch_x, batch_y = batch_data
             if batch_x.numel() == 0: continue
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-            optimizer.zero_grad()
+            
+            # Removed optimizer.zero_grad() from here, it's handled after step()
+            
             try:
                 # Updated autocast call for PyTorch 2.x
                 with torch.amp.autocast(device_type=device.type if args.use_amp else 'cpu', enabled=args.use_amp):
@@ -582,39 +620,62 @@ def main():
                     task_loss = criterion(logits.view(-1, args.vocab_size), batch_y.view(-1))
                     # Add homeostatic regularization
                     loss = task_loss + reg_loss
+                    
+                    # Scale loss by accumulation steps for proper averaging
+                    loss = loss / args.gradient_accumulation_steps
                 
                 if torch.isnan(loss) or torch.isinf(loss): logger.warning(f"Invalid loss ({loss.item():.4f}) @ Step {global_step+1}.") if is_master else None; continue
                 
                 # Scaler Logic to fix LR Scheduler warning
                 scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                if args.grad_clip > 0: torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                
-                # Capture scale before step
-                scale_before = scaler.get_scale()
-                scaler.step(optimizer)
-                scaler.update()
-                scale_after = scaler.get_scale()
-                
-                # Only step scheduler if optimizer step wasn't skipped (scale didn't decrease)
-                if scale_after >= scale_before:
-                    scheduler.step()
+
+                # Perform optimization step only after accumulating enough gradients
+                if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
+                    scaler.unscale_(optimizer)
+                    if args.grad_clip > 0: torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
                     
+                    # Capture scale before step
+                    scale_before = scaler.get_scale()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    scale_after = scaler.get_scale()
+                    
+                    # Only step scheduler if optimizer step wasn't skipped (scale didn't decrease)
+                    if scale_after >= scale_before:
+                        scheduler.step()
+                    
+                    # Zero gradients after successful step
+                    optimizer.zero_grad()
+
+                    # Logging and Checkpointing should trigger on optimizer steps
+                    # Recover the actual loss for logging (multiply back by accum steps)
+                    current_loss = loss.item() * args.gradient_accumulation_steps
+                    cumulative_loss_since_log += current_loss; steps_since_log += 1; 
+                    global_step += 1
+
+                    if is_master and args.log_frequency > 0 and global_step % args.log_frequency == 0 and steps_since_log > 0:
+                        avg_loss = cumulative_loss_since_log / steps_since_log; perplexity = math.exp(min(avg_loss, 700)) if avg_loss > 0 else float('inf'); current_lr = optimizer.param_groups[0]['lr']; batch_time = time.time() - batch_start_time; tokens_per_sec = (current_batch_tokens * world_size) / batch_time if batch_time > 0 else 0
+                        amp_scale_str = f"Scale: {scaler.get_scale():.1f} | " if amp_enabled else ""; 
+                        
+                        # --- UPDATED LOGGING AND DISPLAY ---
+                        # Log to file
+                        log_str = f"Step: {global_step}/{total_optim_steps} | Ep: {epoch+1} | Loss: {avg_loss:.4f} | Reg: {reg_loss.item():.4f} | PPL: {perplexity:.2f} | LR: {current_lr:.2e} | {amp_scale_str}Tok/s: {tokens_per_sec:.0f}"
+                        logger.info(log_str)
+                        
+                        # Update the TQDM visual bar to show "Step X / Y"
+                        epoch_iterator.set_description(f"Ep {epoch+1} | Step {global_step}/{total_optim_steps}")
+                        epoch_iterator.set_postfix(loss=f"{avg_loss:.4f}", ppl=f"{perplexity:.1f}", lr=f"{current_lr:.2e}")
+                        
+                        if WANDB_AVAILABLE and args.use_wandb: epoch_frac = epoch + (global_step / total_optim_steps if total_optim_steps else 0); wandb.log({"train/loss": avg_loss, "train/reg_loss": reg_loss.item(), "train/perplexity": perplexity, "train/learning_rate": current_lr, "train/tokens_per_sec_effective": tokens_per_sec, "train/amp_scale": scaler.get_scale() if amp_enabled else 0.0, "global_step": global_step, "epoch_frac": epoch_frac}, commit=True)
+                        cumulative_loss_since_log = 0.0; steps_since_log = 0
+
+                    if is_master and args.checkpoint_frequency > 0 and global_step % args.checkpoint_frequency == 0:
+                        effective_seq = skip_sequences + sequences_processed_epoch_run; ckpt_state = { 'epoch': epoch, 'sequences_processed_this_epoch': effective_seq, 'global_step': global_step, 'processed_tokens': processed_tokens_offset + tokens_processed_session, 'model_state_dict': model.module.state_dict() if is_ddp else model.state_dict(), 'optimizer_state_dict': optimizer.state_dict(), 'scheduler_state_dict': scheduler.state_dict(), 'scaler_state_dict': scaler.state_dict() if amp_enabled else None, 'config': model_config, 'best_val_loss': best_val_loss, 'device_type': device.type }; save_checkpoint(ckpt_state, args.checkpoint_dir, f"checkpoint_step_{global_step}.pt", is_master)
+
             except Exception as e: logger.error(f"ERROR @ Step {global_step+1}: {e}", exc_info=True) if is_master else None; optimizer.zero_grad(set_to_none=True); continue
 
-            current_loss = loss.item(); cumulative_loss_since_log += current_loss; current_batch_tokens = batch_x.numel(); tokens_processed_session += current_batch_tokens * world_size; steps_since_log += 1; sequences_processed_epoch_run += batch_x.size(0) * world_size; global_step += 1
-
-            if is_master and args.log_frequency > 0 and global_step % args.log_frequency == 0 and steps_since_log > 0:
-                avg_loss = cumulative_loss_since_log / steps_since_log; perplexity = math.exp(min(avg_loss, 700)) if avg_loss > 0 else float('inf'); current_lr = optimizer.param_groups[0]['lr']; batch_time = time.time() - batch_start_time; tokens_per_sec = (current_batch_tokens * world_size) / batch_time if batch_time > 0 else 0
-                epoch_batch_num = (global_step - 1) % steps_per_epoch_approx + 1 if steps_per_epoch_approx else global_step; epoch_perc = min(100.0, (epoch_batch_num / steps_per_epoch_approx) * 100) if steps_per_epoch_approx else 0; epoch_prog = f"{epoch_batch_num}/{steps_per_epoch_approx} ({epoch_perc:.1f}%)" if steps_per_epoch_approx else f"Step {global_step}"
-                amp_scale_str = f"Scale: {scaler.get_scale():.1f} | " if amp_enabled else ""; 
-                # Added Reg loss to log
-                log_str = f"Step: {global_step} | Ep: {epoch+1} [{epoch_prog}] | Loss: {avg_loss:.4f} | Reg: {reg_loss.item():.4f} | PPL: {perplexity:.2f} | LR: {current_lr:.2e} | {amp_scale_str}Tok/s: {tokens_per_sec:.0f}"; logger.info(log_str); epoch_iterator.set_description(f"Epoch {epoch+1}/{args.num_epochs} (Loss: {avg_loss:.4f})")
-                if WANDB_AVAILABLE and args.use_wandb: epoch_frac = epoch + (epoch_batch_num / steps_per_epoch_approx if steps_per_epoch_approx else 0); wandb.log({"train/loss": avg_loss, "train/reg_loss": reg_loss.item(), "train/perplexity": perplexity, "train/learning_rate": current_lr, "train/tokens_per_sec_effective": tokens_per_sec, "train/amp_scale": scaler.get_scale() if amp_enabled else 0.0, "global_step": global_step, "epoch_frac": epoch_frac}, commit=True)
-                cumulative_loss_since_log = 0.0; steps_since_log = 0
-
-            if is_master and args.checkpoint_frequency > 0 and global_step % args.checkpoint_frequency == 0:
-                 effective_seq = skip_sequences + sequences_processed_epoch_run; ckpt_state = { 'epoch': epoch, 'sequences_processed_this_epoch': effective_seq, 'global_step': global_step, 'processed_tokens': processed_tokens_offset + tokens_processed_session, 'model_state_dict': model.module.state_dict() if is_ddp else model.state_dict(), 'optimizer_state_dict': optimizer.state_dict(), 'scheduler_state_dict': scheduler.state_dict(), 'scaler_state_dict': scaler.state_dict() if amp_enabled else None, 'config': model_config, 'best_val_loss': best_val_loss, 'device_type': device.type }; save_checkpoint(ckpt_state, args.checkpoint_dir, f"checkpoint_step_{global_step}.pt", is_master)
+            # Counters update on every micro-batch
+            current_batch_tokens = batch_x.numel(); tokens_processed_session += current_batch_tokens * world_size; sequences_processed_epoch_run += batch_x.size(0) * world_size; 
 
         epoch_iterator.close(); epoch_elapsed = time.time() - epoch_iter_start_time; avg_loss_final = cumulative_loss_since_log / steps_since_log if steps_since_log > 0 else float('nan'); ppl_final = math.exp(min(avg_loss_final, 700)) if not math.isnan(avg_loss_final) and avg_loss_final > 0 else float('inf')
         if is_master: logger.info(f"Epoch {epoch+1} finished data pass. Time: {time.strftime('%H:%M:%S', time.gmtime(epoch_elapsed))}. Final interval Loss: {avg_loss_final:.4f}, PPL: {ppl_final:.2f}")
