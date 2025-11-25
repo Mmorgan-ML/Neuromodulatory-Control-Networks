@@ -27,8 +27,9 @@ Tests are currently being performed on the optimization branch training a 31M pa
 This is an older version of the architecture without flash attention. This architecture, training on a GTX 1650, was averaging 1760 tokens/s. After one epoch of training, it had a Final interval Loss: 2.4735 and PPL: 11.86, along with Avg Validation Loss: 2.2904 | Perplexity: 9.8792. This version has since become deprecated.
 <img width="1200" height="700" alt="Figure_2 500 step" src="https://github.com/user-attachments/assets/2fdbc15f-2e93-45ad-9c41-cfc35b4d1bcc" />
 
-This is the current experimental architecture undergoing its first training run. It is currently averaging 1740 tokens/s but with a higher --n_layer than previous models thanks to optimization attempts. Additional training is required, along with validation perplexity scores, to confirm its feasibility. This run is currently 30% through its first of 4 epochs.
-<img width="3600" height="2100" alt="convergence_analysis" src="https://github.com/user-attachments/assets/86adb1be-e87a-4cf5-94cd-108aeecf7319" />
+This is the current experimental architecture (found on the experimental branch) undergoing its first training run. It is currently averaging 1740 tokens/s but with a higher --n_layer than previous models thanks to optimization attempts (including 5 custom CUDA kernals, and RMSnorm). Additional training is required, along with validation perplexity scores, to confirm its feasibility. This run is currently 70% through its first of 4 epochs. NCN regulation is holding steady near 0.0043, implying the NCN has found an optimal position between 0 (not doing anything) and exploding gradients thanks to some clamping and regularization loss.
+<img width="3600" height="2100" alt="convergence_analysis" src="https://github.com/user-attachments/assets/7e319bec-0f32-4878-8915-aa48fb6158f9" />
+
 
 
 
