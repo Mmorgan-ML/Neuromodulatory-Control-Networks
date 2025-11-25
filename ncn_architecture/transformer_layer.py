@@ -16,42 +16,58 @@ import torch.nn as nn
 from typing import Optional, Dict, Tuple
 
 # Import components from within the package
-from .config import NCNConfig
-from .attention import MultiHeadAttention
-from .feedforward import PositionwiseFeedForward
+try:
+    from .config import NCNConfig
+    from .attention import MultiHeadAttention
+    from .feedforward import PositionwiseFeedForward
+    # Attempt to import custom kernel wrapper
+    from .cuda_kernels import fused_modulated_add
+except ImportError:
+    # Fallback/Direct run
+    from config import NCNConfig
+    from attention import MultiHeadAttention
+    from feedforward import PositionwiseFeedForward
+    # If running directly or compilation failed, define simple fallback
+    def fused_modulated_add(x, residual, gain):
+        return x * gain + residual
+
+class RMSNorm(nn.Module):
+    """
+    Root Mean Square Layer Normalization (RMSNorm).
+    Faster than LayerNorm (no mean subtraction) and standard in modern LLMs (Llama).
+    """
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
 
 class ModulatedTransformerLayer(nn.Module):
     """
     A single Transformer layer incorporating Neuromodulatory Control Network (NCN) signals.
-
-    Implements Multi-Head Self-Attention and Feed-Forward blocks with Layer Normalization,
-    allowing modulation signals to dynamically alter attention precision, FFN gating,
-    and overall layer gains. Uses pre-LayerNorm structure.
+    Now optimized with Custom CUDA Kernels and RMSNorm.
     """
     def __init__(self, config: NCNConfig):
-        """
-        Initializes the ModulatedTransformerLayer.
-
-        Args:
-            config (NCNConfig): Configuration object with model hyperparameters.
-        """
         super().__init__()
         self.config = config
 
-        # Self-Attention mechanism (Updated for Flash Attention & Caching)
+        # Self-Attention mechanism
         self.self_attn = MultiHeadAttention(config, batch_first=True)
 
         # Feed-Forward network
         self.feed_forward = PositionwiseFeedForward(config)
 
-        # Layer Normalization
-        self.norm1 = nn.LayerNorm(config.d_model, eps=config.layer_norm_eps)
-        self.norm2 = nn.LayerNorm(config.d_model, eps=config.layer_norm_eps)
+        # Normalization: Replaced LayerNorm with RMSNorm for speed
+        self.norm1 = RMSNorm(config.d_model, eps=config.layer_norm_eps)
+        self.norm2 = RMSNorm(config.d_model, eps=config.layer_norm_eps)
 
         self.dropout = nn.Dropout(config.dropout)
-
-        # Store expected signal names for clarity (optional)
-        self.expected_signals = config.modulation_signal_names
 
     def forward(
         self,
@@ -63,43 +79,22 @@ class ModulatedTransformerLayer(nn.Module):
         is_causal: bool = False
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
-        Forward pass for the Modulated Transformer Layer.
-
-        Args:
-            src (torch.Tensor): Input sequence tensor (batch, seq_len, d_model).
-            mod_signals (Optional[Dict[str, torch.Tensor]]): Dictionary containing modulation
-                signals specific to this layer. Keys match config.modulation_signal_names.
-                Values are tensors (batch, 1). Defaults to None.
-            src_mask (Optional[torch.Tensor]): Mask for the self-attention layer.
-            past_key_value (Optional[Tuple[torch.Tensor]]): Cached keys/values for this layer.
-            use_cache (bool): Whether to return the updated cache.
-            is_causal (bool): Whether this is a causal (autoregressive) step.
-
-        Returns:
-            Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]: 
-            - Output tensor (batch, seq_len, d_model).
-            - Updated key/value cache if use_cache is True.
+        Forward pass optimized with Fused Kernels.
         """
-        # --- Retrieve Modulation Signals ---
         mod_signals = mod_signals or {} 
 
-        # Extract signals. Note "precision" replaces "attention_temp".
-        # Inputs are expected to be (Batch, 1) from the NCN layer slicing.
+        # Extract signals (Batch, 1) -> unsqueeze to (Batch, 1, 1)
         mod_gain = mod_signals.get("gain") 
         attn_precision = mod_signals.get("precision")
         ffn_gate = mod_signals.get("ffn_gate")
 
-        # Ensure Gain broadcasts: (Batch, 1) -> (Batch, 1, 1)
         if mod_gain is not None and mod_gain.dim() == 2:
              mod_gain = mod_gain.unsqueeze(-1)
 
-        # --- Pre-Normalization Structure ---
-
-        # 1. Self-Attention Block (Norm -> Attention -> Dropout -> Residual)
+        # 1. Self-Attention Block
         residual = src
         x = self.norm1(src)
 
-        # Pass signals and cache to updated MHA
         attn_output, present_key_value = self.self_attn(
             hidden_states=x,
             attention_precision=attn_precision,
@@ -108,26 +103,29 @@ class ModulatedTransformerLayer(nn.Module):
             attn_mask=src_mask,
             is_causal=is_causal
         )
+        
+        # Apply Dropout to attention output (standard Transformer logic)
+        attn_output = self.dropout(attn_output)
 
-        # Apply Gain modulation to attention output
+        # Fused Modulation + Residual
+        # Math: src = attn_output * gain + residual
         if mod_gain is not None:
-            attn_output = attn_output * mod_gain
+            src = fused_modulated_add(attn_output, residual, mod_gain)
+        else:
+            src = residual + attn_output
 
-        # Add residual connection
-        src = residual + self.dropout(attn_output)
-
-        # 2. Feed-Forward Block (Norm -> FFN -> Dropout -> Residual)
+        # 2. Feed-Forward Block
         residual = src
         x = self.norm2(src)
 
-        # Pass FFN gating modulation signal to FFN
         ff_output = self.feed_forward(x, ffn_gate=ffn_gate)
+        ff_output = self.dropout(ff_output)
 
-        # Apply Gain modulation to FFN output
+        # Fused Modulation + Residual
+        # Math: src = ff_output * gain + residual
         if mod_gain is not None:
-            ff_output = ff_output * mod_gain
-
-        # Add residual connection
-        src = residual + self.dropout(ff_output)
+            src = fused_modulated_add(ff_output, residual, mod_gain)
+        else:
+            src = residual + ff_output
 
         return src, present_key_value

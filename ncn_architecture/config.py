@@ -18,10 +18,6 @@ from typing import Optional, List
 class NCNConfig:
     """
     Configuration class for the NCN-Modulated Language Model.
-
-    This dataclass centralizes all hyperparameters for both the base Transformer model
-    and the Neuromodulatory Control Network (NCN). It includes validation logic
-    in its __post_init__ method to ensure configuration consistency.
     """
     # Standard Transformer parameters (with GPT-2 defaults)
     vocab_size: int = 50257
@@ -30,22 +26,24 @@ class NCNConfig:
     num_layers: int = 12
     dim_feedforward: Optional[int] = None # Set in __post_init__
     dropout: float = 0.1
-    max_position_embeddings: int = 2048 # Updated to 2048 for modern contexts
+    max_position_embeddings: int = 2048
     layer_norm_eps: float = 1e-5
     initializer_range: float = 0.02
-    tie_weights: bool = True # Controls tying of input/output token embedding weights
+    tie_weights: bool = True 
 
     # NCN Specific parameters
     ncn_input_dim: Optional[int] = None # Set in __post_init__
     ncn_hidden_dim: int = 128
-    ncn_heads: int = 4 # Added for NCN Attention Pooling
+    ncn_heads: int = 4 
     num_mod_signals: int = 3
-    # Updated default signal names to use "precision" instead of "attention_temp"
     modulation_signal_names: List[str] = field(default_factory=lambda: ["gain", "precision", "ffn_gate"])
     ncn_activation_fn: str = "relu"
     
     # Regularization
-    homeostatic_lambda: float = 0.01 # Strength of penalty for deviation from neutral state
+    homeostatic_lambda: float = 0.01 
+
+    # Memory Optimization
+    gradient_checkpointing: bool = False
 
     # Internal attribute for layer-wise output dimension
     ncn_output_dim: Optional[int] = None
@@ -64,5 +62,4 @@ class NCNConfig:
              raise ValueError(f"ncn_activation_fn must be one of {allowed_activations}")
 
         # Calculate total output dimension for NCN: (Num_Signals * Num_Layers)
-        # This enables layer-wise modulation vectors.
         self.ncn_output_dim = self.num_mod_signals * self.num_layers

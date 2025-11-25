@@ -20,31 +20,21 @@ from typing import Optional, Tuple, List
 try: # Try relative import first
     from .config import NCNConfig
     from .ncn import NeuromodulatoryControlNetwork
-    from .transformer_layer import ModulatedTransformerLayer
+    # Import RMSNorm from transformer_layer to ensure consistency
+    from .transformer_layer import ModulatedTransformerLayer, RMSNorm
 except ImportError: # Fallback for running script directly
     from config import NCNConfig
     from ncn import NeuromodulatoryControlNetwork
-    from transformer_layer import ModulatedTransformerLayer
+    from transformer_layer import ModulatedTransformerLayer, RMSNorm
 
 
 class ModulatedLLM(nn.Module):
     """
     The main Language Model incorporating Neuromodulatory Control Networks (NCNs).
-
-    This model uses a standard Transformer architecture (GPT-style) where each layer's
-    behavior can be dynamically modulated by signals computed by a parallel NCN.
-    
-    Updated for:
-    1. Layer-Wise Modulation vectors.
-    2. KV Caching (Autoregressive generation).
-    3. Homeostatic Regularization.
     """
     def __init__(self, config: NCNConfig):
         """
         Initializes the ModulatedLLM.
-
-        Args:
-            config (NCNConfig): Configuration object with model and NCN hyperparameters.
         """
         super().__init__()
         self.config = config
@@ -62,8 +52,9 @@ class ModulatedLLM(nn.Module):
             [ModulatedTransformerLayer(config) for _ in range(config.num_layers)]
         )
 
-        # --- Final Layer Normalization and Output Head ---
-        self.final_norm = nn.LayerNorm(config.d_model, eps=config.layer_norm_eps)
+        # --- Final Normalization and Output Head ---
+        # Updated to RMSNorm
+        self.final_norm = RMSNorm(config.d_model, eps=config.layer_norm_eps)
         self.output_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
 
         # Apply custom weight initialization
@@ -90,9 +81,11 @@ class ModulatedLLM(nn.Module):
             if module.padding_idx is not None:
                  with torch.no_grad():
                      module.weight[module.padding_idx].fill_(0)
-        elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
+        elif isinstance(module, (nn.LayerNorm, RMSNorm)):
+            # Handle both LayerNorm and RMSNorm (RMSNorm has no bias)
             module.weight.data.fill_(1.0)
+            if hasattr(module, 'bias') and module.bias is not None:
+                module.bias.data.zero_()
 
     def forward(
         self,
@@ -103,27 +96,15 @@ class ModulatedLLM(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[List[Tuple[torch.Tensor, torch.Tensor]]], torch.Tensor]:
         """
         Forward pass of the ModulatedLLM.
-
-        Args:
-            input_ids: Input token IDs of shape (batch_size, seq_length).
-            attention_mask: Mask to avoid attending to padding tokens (batch, seq).
-            past_key_values: List of tuples containing cached keys and values for each layer.
-            use_cache: Boolean, whether to return KV cache.
-
-        Returns:
-            Tuple containing:
-            - logits: (batch, seq, vocab_size)
-            - new_key_values: List of updated caches
-            - reg_loss: Scalar tensor representing homeostatic regularization loss
+        Supports Gradient Checkpointing.
         """
         batch_size, seq_length = input_ids.size()
         device = input_ids.device
 
         # 1. Calculate Embeddings
-        # If using cache (decoding), we typically only pass the last token, so position needs offset
         past_length = 0
         if past_key_values is not None:
-            past_length = past_key_values[0][0].size(2) # (B, Head, Seq, Dim) -> size(2) is seq
+            past_length = past_key_values[0][0].size(2) 
             
         tok_emb = self.token_embeddings(input_ids)
         
@@ -135,15 +116,11 @@ class ModulatedLLM(nn.Module):
         x = self.dropout(tok_emb + pos_emb)
 
         # 2. Compute Neuromodulatory Signals
-        # NCN now uses internal Attention Pooling and handles sequence broadcasting internally.
-        # Returns: Dict {signal_name: (Batch, Seq, NumLayers, 1)}
         mod_signals = self.ncn(control_input=x, current_hidden_state=x)
 
         # 3. Compute Homeostatic Regularization Loss
-        # Penalty = lambda * sum((signal - 1.0)^2)
         reg_loss = torch.tensor(0.0, device=device)
         for signal_name, signal_tensor in mod_signals.items():
-            # Mean squared error from neutral state (1.0)
             loss_component = torch.mean((signal_tensor - 1.0) ** 2)
             reg_loss += loss_component
         
@@ -153,26 +130,37 @@ class ModulatedLLM(nn.Module):
         hidden_states = x
         new_key_values = [] if use_cache else None
         
+        is_causal = True if past_key_values is None else False
+        
         for i, layer in enumerate(self.transformer_layers):
-            # Extract signals specific to this layer.
-            # mod_signals[k] is (Batch, Seq, NumLayers, 1) -> We select layer 'i' from dim 2.
-            # Result: (Batch, Seq, 1).
-            # The transformer components (MHA, FFN) are broadcasting-compatible with (B, S, 1).
             layer_signals = {
                 k: v[:, :, i, :] for k, v in mod_signals.items()
             }
 
-            # Get past cache for this layer
             layer_past = past_key_values[i] if past_key_values is not None else None
             
-            hidden_states, layer_present = layer(
-                src=hidden_states,
-                mod_signals=layer_signals,
-                src_mask=attention_mask, # Padding mask
-                past_key_value=layer_past,
-                use_cache=use_cache,
-                is_causal=True if past_key_values is None else False # Use causal mask if generating from scratch
-            )
+            # Checkpointing logic handled via config flag in train.py (via model config)
+            if self.config.gradient_checkpointing and self.training:
+                from torch.utils.checkpoint import checkpoint
+                hidden_states, layer_present = checkpoint(
+                    layer,
+                    hidden_states,
+                    layer_signals,
+                    attention_mask,
+                    layer_past,
+                    False, 
+                    is_causal,
+                    use_reentrant=False 
+                )
+            else:
+                hidden_states, layer_present = layer(
+                    src=hidden_states,
+                    mod_signals=layer_signals,
+                    src_mask=attention_mask,
+                    past_key_value=layer_past,
+                    use_cache=use_cache,
+                    is_causal=is_causal
+                )
             
             if use_cache:
                 new_key_values.append(layer_present)
