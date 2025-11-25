@@ -1,0 +1,1 @@
+https://huggingface.co/Megneous/31M_experimental_Ep1_30per/blob/main/checkpoint_step_1600.pt
