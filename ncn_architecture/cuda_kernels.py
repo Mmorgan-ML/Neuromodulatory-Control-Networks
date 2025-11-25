@@ -413,9 +413,21 @@ class FusedRMSNorm(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, weight, eps):
         ctx.eps = eps
+        # Save original weights (likely FP32) for backward pass
         ctx.save_for_backward(x, weight)
+        
         if _ncn_cuda and x.is_cuda:
-            return _ncn_cuda.launch_rmsnorm(x, weight, eps)
+            # TYPE SAFETY FIX for AMP:
+            # During Mixed Precision, activations 'x' are cast to Half, but 'weight' remains Float.
+            # The C++ kernel expects input and weight to be of the same template type 'scalar_t'.
+            # We explicitly cast weight to match x.dtype (Half) for the forward execution.
+            # This does not affect the saved 'weight' for backward (already saved above).
+            kernel_weight = weight
+            if weight.dtype != x.dtype:
+                kernel_weight = weight.to(x.dtype)
+            
+            return _ncn_cuda.launch_rmsnorm(x, kernel_weight, eps)
+            
         # Fallback (Only use if compilation fails, but we want to know if it fails!)
         if _ncn_cuda is None:
             print("WARNING: Using PyTorch Fallback for RMSNorm (CUDA Failed)")
