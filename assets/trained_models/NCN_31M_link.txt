@@ -1,1 +1,0 @@
-https://huggingface.co/Megneous/NCN_31M/resolve/main/checkpoint_step_110000.pt?download=true
