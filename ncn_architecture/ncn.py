@@ -18,6 +18,12 @@ from typing import Dict, Optional
 
 from .config import NCNConfig
 
+# Try to import custom CUDA kernel
+try:
+    from .cuda_kernels import ncn_actuator_cuda
+except ImportError:
+    ncn_actuator_cuda = None
+
 # Activation functions specifically for the NCN internal layers
 _NCN_ACTIVATION_FUNCTIONS = {
     "relu": F.relu,
@@ -182,13 +188,33 @@ class NeuromodulatoryControlNetwork(nn.Module):
         mod_signals_reshaped = mod_signals_flat.view(batch_size, seq_len, self.num_layers, self.num_mod_signals)
 
         mod_signals_processed = {}
-        for i, name in enumerate(self.signal_names):
-            # Slice specific signal across all layers: (Batch, Seq, Num_Layers, 1)
-            raw_signal_slice = mod_signals_reshaped[:, :, :, i].unsqueeze(-1)
+        
+        # High-Performance CUDA Path
+        # We only use the kernel if:
+        # 1. Kernel is loaded
+        # 2. Data is on GPU
+        # 3. We have exactly 3 signals (Kernel hardcoded for Gain/Prec/Gate triplet)
+        if ncn_actuator_cuda is not None and mod_signals_flat.is_cuda and self.num_mod_signals == 3:
+            # The kernel processes the triplet in a Structure-of-Arrays coalesced manner.
+            # Expected Input: (..., 3) -> [raw_gain, raw_prec, raw_gate]
+            # Returns: (..., ) gain, precision, gate
             
-            transform_func = self.signal_transforms.get(name)
-            if transform_func:
-                processed_signal = transform_func(raw_signal_slice)
-                mod_signals_processed[name] = processed_signal
+            g, p, f = ncn_actuator_cuda(mod_signals_reshaped)
+            
+            # The rest of the architecture expects (..., 1) for broadcasting
+            mod_signals_processed["gain"] = g.unsqueeze(-1)
+            mod_signals_processed["precision"] = p.unsqueeze(-1)
+            mod_signals_processed["ffn_gate"] = f.unsqueeze(-1)
+            
+        else:
+            # Fallback (CPU or custom signal config)
+            for i, name in enumerate(self.signal_names):
+                # Slice specific signal across all layers: (Batch, Seq, Num_Layers, 1)
+                raw_signal_slice = mod_signals_reshaped[:, :, :, i].unsqueeze(-1)
+                
+                transform_func = self.signal_transforms.get(name)
+                if transform_func:
+                    processed_signal = transform_func(raw_signal_slice)
+                    mod_signals_processed[name] = processed_signal
 
         return mod_signals_processed

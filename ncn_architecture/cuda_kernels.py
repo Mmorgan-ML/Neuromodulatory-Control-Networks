@@ -102,11 +102,25 @@ __global__ void ncn_actuator_kernel(
         float raw_f = static_cast<float>(input[base_ptr + 2]);
 
         // Sigmoid(g) + 0.5
-        float g_val = (1.0f / (1.0f + expf(-raw_g))) + 0.5f;
+        // GUARD: Prevent exp overflow for large negative inputs
+        float g_val;
+        if (raw_g < -88.0f) g_val = 0.5f;
+        else g_val = (1.0f / (1.0f + expf(-raw_g))) + 0.5f;
+
         // Softplus(p) + 0.01
-        float p_val = logf(1.0f + expf(raw_p)) + 0.01f;
+        // GUARD: Linear approximation for large inputs to prevent exp overflow (Inf)
+        float p_val;
+        if (raw_p > 20.0f) {
+            p_val = raw_p + 0.01f;
+        } else {
+            p_val = logf(1.0f + expf(raw_p)) + 0.01f;
+        }
+
         // Sigmoid(f)
-        float f_val = 1.0f / (1.0f + expf(-raw_f));
+        // GUARD: Prevent exp overflow
+        float f_val;
+        if (raw_f < -88.0f) f_val = 0.0f;
+        else f_val = 1.0f / (1.0f + expf(-raw_f));
 
         out_gain[idx]      = static_cast<T>(g_val);
         out_precision[idx] = static_cast<T>(p_val);
@@ -379,10 +393,10 @@ std::vector<torch::Tensor> modulated_add_backward(torch::Tensor grad_output, tor
 }
 """
 
-print("Compiling NCN High-Performance Kernels (v5.1 - Windows Fix)...")
+print("Compiling NCN High-Performance Kernels (v5.3 - Stability Fixes)...")
 try:
     _ncn_cuda = load_inline(
-        name='ncn_fused_ops_v5_1', 
+        name='ncn_fused_ops_v5_3', 
         cpp_sources=cpp_source,
         cuda_sources=cuda_source + cuda_wrapper,
         functions=[

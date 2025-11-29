@@ -20,16 +20,21 @@ try:
     from .config import NCNConfig
     from .attention import MultiHeadAttention
     from .feedforward import PositionwiseFeedForward
-    # Attempt to import custom kernel wrapper
-    from .cuda_kernels import fused_modulated_add
+    # Attempt to import custom kernel wrappers
+    from .cuda_kernels import fused_modulated_add, rms_norm_cuda
 except ImportError:
     # Fallback/Direct run
     from config import NCNConfig
     from attention import MultiHeadAttention
     from feedforward import PositionwiseFeedForward
-    # If running directly or compilation failed, define simple fallback
+    
+    # If running directly or compilation failed, define simple fallbacks
     def fused_modulated_add(x, residual, gain):
         return x * gain + residual
+
+    def rms_norm_cuda(x, weight, eps):
+        # Fallback: Explicit float cast for precision, then cast back
+        return x * torch.rsqrt(x.float().pow(2).mean(-1, keepdim=True) + eps).type_as(x) * weight
 
 class RMSNorm(nn.Module):
     """
@@ -41,12 +46,9 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
-    def _norm(self, x):
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
     def forward(self, x):
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
+        # Optimized Fused Kernel (Automatic FP32 accumulation -> FP16 output)
+        return rms_norm_cuda(x, self.weight, self.eps)
 
 class ModulatedTransformerLayer(nn.Module):
     """
