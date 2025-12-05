@@ -9,6 +9,7 @@
  2025.11.25
  Github: https://github.com/Mmorgan-ML
  Email: mmorgankorea@gmail.com
+ Twitter: @Mmorgan_ML
 """
 
 import torch
@@ -101,20 +102,24 @@ __global__ void ncn_actuator_kernel(
         float raw_p = static_cast<float>(input[base_ptr + 1]);
         float raw_f = static_cast<float>(input[base_ptr + 2]);
 
-        // Sigmoid(g) + 0.5
+        // 2 * Sigmoid(g) -> Range [0, 2]
         // GUARD: Prevent exp overflow for large negative inputs
         float g_val;
-        if (raw_g < -88.0f) g_val = 0.5f;
-        else g_val = (1.0f / (1.0f + expf(-raw_g))) + 0.5f;
+        if (raw_g < -88.0f) g_val = 0.0f;
+        else g_val = 2.0f * (1.0f / (1.0f + expf(-raw_g)));
 
         // Softplus(p) + 0.01
-        // GUARD: Linear approximation for large inputs to prevent exp overflow (Inf)
+        // GUARD: Linear approximation for large inputs to prevent exp overflow
         float p_val;
         if (raw_p > 20.0f) {
             p_val = raw_p + 0.01f;
         } else {
             p_val = logf(1.0f + expf(raw_p)) + 0.01f;
         }
+        
+        // CRITICAL FIX: Thermodynamic Limit (Match Paper Section 3.5)
+        // Clamp precision to max 4.0 to prevent gradient explosion and Argmax collapse.
+        p_val = fminf(p_val, 4.0f);
 
         // Sigmoid(f)
         // GUARD: Prevent exp overflow
@@ -469,16 +474,27 @@ class FusedNCNActuator(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_gain, grad_prec, grad_gate):
         x, = ctx.saved_tensors
+        # x is the RAW INPUT
         g, p, f = x.chunk(3, dim=-1)
+        
         d_g = d_p = d_f = None
+        
+        # --- FIXED GAIN MATH ---
         if grad_gain is not None:
+             # 1. Compute Sigmoid of raw input
              sig_g = torch.sigmoid(g)
-             d_g = grad_gain * (sig_g * (1 - sig_g))
+             # 2. Apply derivative: 2 * s * (1 - s)
+             d_g = grad_gain * (2.0 * sig_g * (1.0 - sig_g))
+             
         if grad_prec is not None:
+             # Derivative of Softplus(x) is Sigmoid(x)
              d_p = grad_prec * torch.sigmoid(p)
+             
         if grad_gate is not None:
+             # Derivative of Sigmoid(x) is s * (1 - s)
              sig_f = torch.sigmoid(f)
-             d_f = grad_gate * (sig_f * (1 - sig_f))
+             d_f = grad_gate * (sig_f * (1.0 - sig_f))
+             
         return torch.cat([d_g, d_p, d_f], dim=-1)
 
 class FusedModulatedAdd(torch.autograd.Function):

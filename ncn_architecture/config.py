@@ -9,6 +9,7 @@
  2025.04.25
  Github: https://github.com/Mmorgan-ML
  Email: mmorgankorea@gmail.com
+ Twitter: @Mmorgan_ML
 """
 
 from dataclasses import dataclass, field
@@ -37,7 +38,9 @@ class NCNConfig:
     ncn_heads: int = 4 
     num_mod_signals: int = 3
     modulation_signal_names: List[str] = field(default_factory=lambda: ["gain", "precision", "ffn_gate"])
-    ncn_activation_fn: str = "relu"
+    
+    # CHANGED: Default to 'tanh' to align with RMSNorm+Tanh stability fix
+    ncn_activation_fn: str = "tanh"
     
     # Regularization
     homeostatic_lambda: float = 0.01 

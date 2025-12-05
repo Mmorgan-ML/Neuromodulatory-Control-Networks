@@ -5,10 +5,11 @@
  To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/4.0/
  or send a letter to Creative Commons, PO Box 1866, Mountain View, CA 94042, USA.
 
- Original Author: Michael Morgan
+ Original Author: Michael Christian Morgan
  2025.04.25
  Github: https://github.com/Mmorgan-ML
  Email: mmorgankorea@gmail.com
+ Twitter: @Mmorgan_ML
 """
 
 import torch
@@ -17,6 +18,7 @@ import torch.nn.functional as F
 from typing import Dict, Optional
 
 from .config import NCNConfig
+from .transformer_layer import RMSNorm
 
 # Try to import custom CUDA kernel
 try:
@@ -67,6 +69,9 @@ class NeuromodulatoryControlNetwork(nn.Module):
         )
 
         # --- 2. NCN Core Architecture ---
+        # Internal Normalization: Stabilizes the "Phasic Feel" input
+        self.ncn_norm = RMSNorm(self.input_dim, eps=config.layer_norm_eps)
+
         # Layer 1: Projection from pooled context + optional hidden state
         self.layer1 = nn.Linear(self.input_dim, self.hidden_dim)
         
@@ -79,17 +84,21 @@ class NeuromodulatoryControlNetwork(nn.Module):
         self._init_output_biases()
 
         # Get NCN internal activation function
-        activation_name = config.ncn_activation_fn.lower()
-        self.activation = _NCN_ACTIVATION_FUNCTIONS.get(activation_name)
-        if self.activation is None:
-             raise ValueError(f"Unsupported ncn_activation_fn: {config.ncn_activation_fn}")
+        # STABILITY FIX: Enforcing Tanh to ensure 0-centered distribution for Identity Initialization
+        self.activation = nn.Tanh()
+        
+        # Validation check for config consistency (optional logging could go here)
+        if config.ncn_activation_fn.lower() != "tanh":
+            # We silently override or just proceed, as Tanh is structurally required for the init math.
+            pass
 
         # --- Define Signal Transformations ---
         self.signal_transforms = {}
         for name in self.signal_names:
             if name == "gain":
-                # Range: [0.5, 1.5] centered at 1.0
-                self.signal_transforms[name] = lambda x: torch.sigmoid(x) + 0.5
+                # Range: [0.0, 2.0] centered at 1.0 (2 * Sigmoid(0) = 1.0)
+                # Allows driving gain to 0 for gradient shielding.
+                self.signal_transforms[name] = lambda x: 2.0 * torch.sigmoid(x)
             elif name == "precision": # Replaces attention_temp
                 # Range: (0, +inf). 1.0 is neutral.
                 # Softplus(x) + 0.01 guarantees positivity.
@@ -178,7 +187,11 @@ class NeuromodulatoryControlNetwork(nn.Module):
 
         # --- Step 3: NCN Core Computation ---
         # combined_input is (Batch, Seq, Dim)
-        hidden = self.activation(self.layer1(combined_input))
+        
+        # STABILITY FIX: Normalize input to decouple magnitude from pattern
+        normalized_input = self.ncn_norm(combined_input)
+        
+        hidden = self.activation(self.layer1(normalized_input))
         
         # Output Shape: (Batch, Seq, Num_Signals * Num_Layers)
         mod_signals_flat = self.layer2(hidden) 

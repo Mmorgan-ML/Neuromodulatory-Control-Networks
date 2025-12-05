@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: Morgan
+  given-names: Michael Christian
+title: "Neuromodulatory Control Networks (NCNs): A Biologically Inspired Architecture for Dynamic LLM Processing"
+version: 1.0.0
+date-released: 2025-11-30
+url: "https://github.com/Mmorgan_ML/Neuromodulatory-Control-Networks"

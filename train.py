@@ -24,6 +24,7 @@ Original Author: Michael Morgan
 Date: 2025-11-25
 Github: https://github.com/Mmorgan-ML
 Email: mmorgankorea@gmail.com
+Twitter: @Mmorgan_ML
 """
 
 import os
@@ -256,7 +257,7 @@ def parse_arguments():
     parser.add_argument("--ncn_hidden_dim", type=int, default=128, help="NCN hidden dimension.")
     parser.add_argument("--ncn_heads", type=int, default=4, help="Number of heads for NCN attention pooling.")
     parser.add_argument("--mod_signal_names", nargs='+', default=["gain", "precision", "ffn_gate"], help="NCN modulation signal names.")
-    parser.add_argument("--ncn_act_fn", type=str, default="relu", help="NCN activation.")
+    parser.add_argument("--ncn_act_fn", type=str, default="tanh", help="NCN activation.")
     # Training Params
     parser.add_argument('--num_epochs', type=int, required=True, help="Total training epochs.")
     parser.add_argument('--batch_size', type=int, default=8, help="Batch size per device.")
@@ -463,6 +464,21 @@ def main():
         load_model_state_dict(ckpt_path, model, device)
 
     if is_ddp: model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+    
+    # --- LOG PARAMETER BREAKDOWN ---
+    if is_master:
+        base_model = model.module if is_ddp else model
+        ncn_params = sum(p.numel() for p in base_model.ncn.parameters())
+        total_params = sum(p.numel() for p in base_model.parameters())
+        transformer_params = total_params - ncn_params
+        
+        logger.info("="*40)
+        logger.info("Model Parameter Breakdown:")
+        logger.info(f"  Transformer parameters: {format_param_count(transformer_params)}")
+        logger.info(f"  NCN parameters:         {format_param_count(ncn_params)}")
+        logger.info(f"  Total parameters:       {format_param_count(total_params)}")
+        logger.info(f"  NCN Ratio:              {ncn_params/total_params*100:.3f}%")
+        logger.info("="*40)
 
     # --- INIT OPTIMIZER & SCALER ---
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
