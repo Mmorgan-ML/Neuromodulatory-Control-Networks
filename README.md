@@ -22,19 +22,16 @@ When you first run the NCN architecture using the train.py script, it will creat
 As creating a new tokenized_val_data.pt file is time and resource expensive, if you start a new run or resume an old training run with the same training set, you may keep the tokenized_val_data.pt file and reuse it, saving significant time.
 
 # Current Progress / Work / Optimization Branch
-Tests are currently being performed on the optimization branch training a 31M parameter model on ~700 MB of .txt files that have been tokenized into a .bin file. (I believe some of these improvements, such as using a real tokenizer rather than my questionable open source one and pre-tokenizing the dataset will be coming to the main branch soon.) I'm also experimenting with custom cuda kernels to speed up training. We are very compute constrained, so this will take quite a while. We ask the community to help in validating the architecture and the role the NCN plays in modulating the main LLM. Here are some pictures of the perplexity falling over the course of training.
+An 18M parameter model is currently being trained on TinyStories using the architecture found in the optimization branch. It is, so far, proving very stable and robust. It is highly likely the optimization branch will become the new main branch as we collect empirical evidence of the 18M model working as intended.
 
-This is an older version of the architecture without flash attention. This architecture, training on a GTX 1650, was averaging 1760 tokens/s. After one epoch of training, it had a Final interval Loss: 2.4735 and PPL: 11.86, along with Avg Validation Loss: 2.2904 | Perplexity: 9.8792. This version has since become deprecated.
-<img width="1200" height="700" alt="Figure_2 500 step" src="https://github.com/user-attachments/assets/2fdbc15f-2e93-45ad-9c41-cfc35b4d1bcc" />
+<img width="3600" height="2100" alt="convergence_analysis" src="https://github.com/user-attachments/assets/61485bc2-0e4a-47b2-863a-dd2f29c48ff7" />
 
-This is the current experimental architecture (found on the experimental branch) undergoing its first training run. It is currently averaging 1740 tokens/s but with a higher --n_layer than previous models thanks to optimization attempts (including 5 custom CUDA kernals, and RMSnorm). Additional training is required, along with validation perplexity scores, to confirm its feasibility. This run is currently 70% through its first of 4 epochs. NCN regulation is holding steady near 0.0043, implying the NCN has found an optimal position between 0 (not doing anything) and exploding gradients thanks to some clamping and regularization loss.
-<img width="3600" height="2100" alt="convergence_analysis" src="https://github.com/user-attachments/assets/7e319bec-0f32-4878-8915-aa48fb6158f9" />
+This is the current experimental architecture (found on the experimental branch) undergoing its first training run (18M parameters on TinyStories). We are about 33% of the way through the training run. We look forward to the validation score. NCN regulation is holding steady between .0033 and .0034, implying the NCN has found an optimal position between 0 (not doing anything) and exploding gradients. Perplexity dropped to below 6 within the first 15% of the 1st epoch, implying high sample efficiency for this architecture.
 
-
-
+<img width="1887" height="997" alt="image" src="https://github.com/user-attachments/assets/d3dedf2d-1cd2-4425-8090-9dab248c8138" />
 
 ## Future Work
-While we're currently training models using the architecture, we must consider future work. Some future work ideas are laid out in the accompanying paper, such as testing if the NCN can modulate learning rate or a router for MoE or Mixture-of-Heads Attention, but there are more near term goals. After fully converged models are made (either this 31M parameter model, or perhaps a larger model if 31M proves too small), a generation / inference script will be written to produce text using the model. After this, a method will be devised to examine the temperature / precision, layer gains, and FF gating of the model as it undergoes inference, to see if the NCN is successfully modulating the outputs of the main LLM.
+While we're currently training the 18M model using the architecture, we must consider future work. Some future work ideas are laid out in the accompanying paper, such as testing if the NCN can modulate learning rate or a router for MoE or Mixture-of-Heads Attention, but there are more near term goals. After fully converged models are made (this 18M model will be a prime candidate), a generation / inference script will be written to produce text using the model. After this, a method will be devised to examine the temperature / precision, layer gains, and FF gating of the model as it undergoes inference, to see if the NCN is successfully modulating the outputs of the main LLM.
 
 
 
