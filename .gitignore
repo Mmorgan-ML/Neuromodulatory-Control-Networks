@@ -1,0 +1,21 @@
+# Python junk
+__pycache__/
+*.py[cod]
+*$py.class
+
+# VS Code settings
+.vscode/
+
+# Virtual environments
+venv/
+env/
+
+# Distribution / Build Artifacts (Critical for setup.py)
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# OS Junk
+.DS_Store
+Thumbs.db
