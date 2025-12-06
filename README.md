@@ -4,31 +4,17 @@ Large Language Models (LLMs) based on the Transformer architecture have achieved
 # What does it do? How does it work?
 The Neuromodulatory Control Network architecture operates by running a compact neural network in parallel with the main LLM. When the system processes an input sequence, the NCN generates a latent representation, consisting of a sequence of 768-dimensional vectors, that captures the specific "texture" of the input. During training, the network uses end-to-end gradient modulation to dynamically adjust the attention temperature, layer gain, and feed-forward gating, implicitly learning which parameter states minimize loss for different contexts. For example, if a user asks a standard math question, the NCN detects the context and lowers the temperature to encourage fact recall, whereas asking the model to write a poem results in the NCN increasing temperature to foster creativity. We recently updated the architecture to make these representations "phasic" rather than "tonic," meaning the network now distinguishes between sequences that share the same words but in different orders. While a tonic representation might generate identical embeddings for "The dog chased the cat" and "The cat chased the dog," the phasic approach produces distinct values for each. This prevents the system from overfitting on keywords, ensuring that while rote calculation triggers a low-temperature state, the NCN can still apply high creativity to complex prompts like "Create a new mathematical conjecture about black holes" or "Unify Knot Theory and Number Theory" despite the mathematical vocabulary.
 
-# Example Commands to use the NCN architecture
-## Example of Starting a Training Run
-python train.py --d_model 320 --n_layer 12 --n_head 10 --ncn_heads 4 --num_epochs 4 --batch_size 4 --gradient_accumulation_steps 16 --block_size 1024 --lr 5e-4 --total_tokens 313228872 --use_amp --checkpoint_frequency 500 --log_frequency 25 --num_workers auto
-
-## Example of Resuming a Checkpoint
-python train.py --resume_checkpoint ncn_checkpoints/checkpoint_step_76000.pt --num_epochs 4 --batch_size 4 --gradient_accumulation_steps 16 --total_tokens 313228872 --use_amp --checkpoint_frequency 500 --log_frequency 25
-
-## What is the --total_tokens Argument?
-Use the --total_tokens argument after counting tokens in your training set once so you don't have to waste time recounting tokens every time you start a new training run or resume training a checkpoint.
-
-# Creation of the Validation Set
-## First Run
-When you first run the NCN architecture using the train.py script, it will create a tokenized validation set using the files in the training_data directory with the default name tokenized_val_data.pt. This is time consuming.
-
-## Starting a New Run or Resuming a Run using the same Training Set
-As creating a new tokenized_val_data.pt file is time and resource expensive, if you start a new run or resume an old training run with the same training set, you may keep the tokenized_val_data.pt file and reuse it, saving significant time.
-
 # Current Progress / Work / Optimization Branch
-An 18M parameter model is currently being trained on TinyStories using the architecture found in the optimization branch. It is, so far, proving very stable and robust. It is highly likely the optimization branch will become the new main branch as we collect empirical evidence of the 18M model working as intended.
+First of all, it trains. It trains smoothly. An 18M parameter model is currently being trained on TinyStories using the architecture found in the optimization branch. It is, so far, proving very stable and robust. It is highly likely the optimization branch will become the new main branch as we collect empirical evidence of the 18M model working as intended.
 
 <img width="3600" height="2100" alt="convergence_analysis" src="https://github.com/user-attachments/assets/61485bc2-0e4a-47b2-863a-dd2f29c48ff7" />
 
 This is the current experimental architecture (found on the experimental branch) undergoing its first training run (18M parameters on TinyStories). We are about 33% of the way through the training run. We look forward to the validation score. NCN regulation is holding steady between .0033 and .0034, implying the NCN has found an optimal position between 0 (not doing anything) and exploding gradients. Perplexity dropped to below 6 within the first 15% of the 1st epoch, implying high sample efficiency for this architecture.
 
-<img width="1887" height="997" alt="image" src="https://github.com/user-attachments/assets/d3dedf2d-1cd2-4425-8090-9dab248c8138" />
+The current model shows very high sample efficiency. Despite being a small model at 18M parameters, it 95% converged (Grammar, Syntax) on TinyStories by step 2540 with a Sample Efficiency Index of 2713. By step 6040, it had 99% converged (Intellectual) with a Sample Efficiency Index of 0.1955. If all goes well, this kind of architecture could greatly increase sample efficiency for training and lower compute costs.
+
+<img width="4200" height="2400" alt="analysis_grammar_95" src="https://github.com/user-attachments/assets/2b513816-f7ac-4d3f-b565-b5a7d537fe17" />
+<img width="4200" height="2400" alt="analysis_intellectual_99" src="https://github.com/user-attachments/assets/0bb01ba3-d484-4843-b92e-0b05ab966d93" />
 
 ## Future Work
 While we're currently training the 18M model using the architecture, we must consider future work. Some future work ideas are laid out in the accompanying paper, such as testing if the NCN can modulate learning rate or a router for MoE or Mixture-of-Heads Attention, but there are more near term goals. After fully converged models are made (this 18M model will be a prime candidate), a generation / inference script will be written to produce text using the model. After this, a method will be devised to examine the temperature / precision, layer gains, and FF gating of the model as it undergoes inference, to see if the NCN is successfully modulating the outputs of the main LLM.
