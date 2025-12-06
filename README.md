@@ -7,7 +7,7 @@ The Neuromodulatory Control Network architecture operates by running a compact n
 # Current Progress / Work / Optimization Branch
 First of all, it trains. It trains smoothly. An 18M parameter model is currently being trained on TinyStories using the architecture found in the optimization branch. It is, so far, proving very stable and robust. It is highly likely the optimization branch will become the new main branch as we collect empirical evidence of the 18M model working as intended.
 
-<img width="3600" height="2100" alt="convergence_analysis" src="https://github.com/user-attachments/assets/61485bc2-0e4a-47b2-863a-dd2f29c48ff7" />
+<img width="3600" height="2100" alt="convergence_analysis" src="https://github.com/user-attachments/assets/189ae6c9-ae90-4518-96b3-8a641b1bde29" />
 
 This is the current experimental architecture (found on the experimental branch) undergoing its first training run (18M parameters on TinyStories). We are about 33% of the way through the training run. We look forward to the validation score. NCN regulation is holding steady between .0033 and .0034, implying the NCN has found an optimal position between 0 (not doing anything) and exploding gradients. Perplexity dropped to below 6 within the first 15% of the 1st epoch, implying high sample efficiency for this architecture.
 
