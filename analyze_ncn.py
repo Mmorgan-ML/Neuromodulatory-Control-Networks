@@ -1,5 +1,34 @@
 # ncn_project/analyze_ncn.py
 
+"""
+Analysis & Visualization Tool
+--------------------------------------------------------------------
+
+Description:
+    This script serves as a post-training analytical suite for the NCN architecture.
+    It provides mechanisms to:
+    1. Load trained model checkpoints with state recovery.
+    2. Perform autoregressive text generation to validate perplexity and coherence.
+    3. Conduct "Brain Scans": A mechanistic interpretability routine that hooks
+       into the NCN controller during a forward pass to capture and visualize
+       the dynamic modulation signals (Gain, Precision, Gating) across all layers
+       and time steps.
+
+    The resulting 'brain_scan_trace.png' offers a direct view into the model's
+    implicit attentional strategy and metabolic energy allocation, effectively
+    mapping the "cognitive state" of the network over a sequence.
+
+This work is licensed under the Creative Commons Attribution-ShareAlike 4.0 International License.
+To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/4.0/
+or send a letter to Creative Commons, PO Box 1866, Mountain View, CA 94042, USA.
+
+Original Author: Michael Morgan
+Date: 2025-11-24
+Github: https://github.com/Mmorgan-ML
+Email: mmorgankorea@gmail.com
+Twitter: @Mmorgan_ML    
+"""
+
 import torch
 import matplotlib.pyplot as plt
 import seaborn as sns
