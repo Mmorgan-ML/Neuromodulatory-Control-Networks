@@ -10,11 +10,6 @@ Features:
 - Gradient Checkpointing support.
 - FULL DETAILED LOGGING (Loss, Reg, PPL, LR, Scale, Tok/s, Progress).
 - FULL Resume capability (Model, Optimizer, Scheduler, Scaler).
-- CRITICAL FIX: Architecture arguments sync with checkpoint before Dataset creation.
-- CRITICAL FIX: Data Loader Fast-Forwarding on Resume.
-- CRITICAL FIX: Explicit Checkpoint Logging.
-- CRITICAL FIX: Correct TQDM Progress Bar (No double counting).
-- CRITICAL FIX: LR Override on Resume (Forces new LR even when loading optimizer state).
 
 This work is licensed under the Creative Commons Attribution-ShareAlike 4.0 International License.
 To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/4.0/

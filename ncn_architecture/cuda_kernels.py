@@ -13,6 +13,7 @@
 """
 
 import torch
+import torch.nn.functional as F
 from torch.utils.cpp_extension import load_inline
 
 # --- CUDA SOURCE ---
@@ -163,12 +164,6 @@ __global__ void kv_update_kernel(
 // =========================================================================
 // KERNEL 4: ONLINE SOFTMAX UPDATE (Fused Cross-Entropy Support)
 // =========================================================================
-// This kernel updates running Max and Sum-Exp statistics using a new "chunk" of logits.
-// It avoids materializing the full (B, S, V) tensor by processing V in chunks.
-//
-// running_max: (Batch * Seq)
-// running_sum: (Batch * Seq)
-// chunk_logits: (Batch * Seq, Chunk_Size)
 template <typename T>
 __global__ void online_softmax_update_kernel(
     float* __restrict__ running_max,
@@ -426,7 +421,7 @@ except Exception as e:
     print(f"KERNEL COMPILATION FAILED: {e}")
     _ncn_cuda = None
 
-# --- PYTHON BINDINGS ---
+# --- PYTHON BINDINGS & FALLBACKS ---
 
 class FusedRMSNorm(torch.autograd.Function):
     @staticmethod
@@ -436,20 +431,14 @@ class FusedRMSNorm(torch.autograd.Function):
         ctx.save_for_backward(x, weight)
         
         if _ncn_cuda and x.is_cuda:
-            # TYPE SAFETY FIX for AMP:
-            # During Mixed Precision, activations 'x' are cast to Half, but 'weight' remains Float.
-            # The C++ kernel expects input and weight to be of the same template type 'scalar_t'.
-            # We explicitly cast weight to match x.dtype (Half) for the forward execution.
-            # This does not affect the saved 'weight' for backward (already saved above).
+            # TYPE SAFETY FIX for AMP
             kernel_weight = weight
             if weight.dtype != x.dtype:
                 kernel_weight = weight.to(x.dtype)
             
             return _ncn_cuda.launch_rmsnorm(x, kernel_weight, eps)
             
-        # Fallback (Only use if compilation fails, but we want to know if it fails!)
-        if _ncn_cuda is None:
-            print("WARNING: Using PyTorch Fallback for RMSNorm (CUDA Failed)")
+        # Fallback
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
 
     @staticmethod
@@ -518,20 +507,54 @@ class FusedModulatedAdd(torch.autograd.Function):
             tmp = grad_output * x
             grad_gain = tmp.sum(dim=-1, keepdim=True).view_as(gain)
             return grad_x, grad_residual, grad_gain
+        
+        # Fallback Backward
         return None, None, None
 
+# --- WRAPPER FUNCTIONS WITH ROBUST FALLBACKS ---
+
 def rms_norm_cuda(x, weight, eps):
-    return FusedRMSNorm.apply(x, weight, eps)
+    # If compiled, use Fused class. If not, use class fallback logic.
+    if _ncn_cuda and x.is_cuda:
+        return FusedRMSNorm.apply(x, weight, eps)
+    else:
+        # Direct PyTorch fallback (avoids overhead of custom autograd if not using kernel)
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * weight
 
 def ncn_actuator_cuda(x):
-    return FusedNCNActuator.apply(x)
+    if _ncn_cuda and x.is_cuda:
+        return FusedNCNActuator.apply(x)
+    else:
+        # Manual PyTorch Fallback matching kernel logic
+        g_raw, p_raw, f_raw = x.chunk(3, dim=-1)
+        
+        # Gain: 2 * sigmoid
+        g = 2.0 * torch.sigmoid(g_raw)
+        
+        # Precision: Softplus + 0.01 + Clamp(4.0)
+        p = F.softplus(p_raw) + 0.01
+        p = torch.clamp(p, max=4.0)
+        
+        # Gate: Sigmoid
+        f = torch.sigmoid(f_raw)
+        
+        # Squeeze to match kernel shape behavior
+        return g.squeeze(-1), p.squeeze(-1), f.squeeze(-1)
 
 def kv_cache_update_cuda(cache, new_tok, positions):
     if _ncn_cuda and cache.is_cuda:
         _ncn_cuda.launch_kv_update(cache, new_tok, positions.int())
+    else:
+        # PyTorch Fallback using advanced indexing
+        # cache: (B, H, S, D), new_tok: (B, H, 1, D), positions: (B)
+        batch_indices = torch.arange(cache.size(0), device=cache.device)
+        cache[batch_indices, :, positions, :] = new_tok.squeeze(2)
 
 def fused_modulated_add(x, residual, gain):
-    return FusedModulatedAdd.apply(x, residual, gain)
+    if _ncn_cuda and x.is_cuda:
+        return FusedModulatedAdd.apply(x, residual, gain)
+    else:
+        return x * gain + residual
 
 # Helper for Online Softmax (Use in generation loop or custom loss)
 def online_softmax_update_cuda(running_max, running_sum, chunk_logits):

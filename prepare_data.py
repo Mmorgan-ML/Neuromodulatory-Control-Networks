@@ -11,6 +11,7 @@ Original Author: Michael Morgan
 Date: 2025-11-24
 Github: https://github.com/Mmorgan-ML
 Email: mmorgankorea@gmail.com
+Twitter: @Mmorgan_ML
 """
 
 import os
@@ -31,20 +32,15 @@ def prepare():
         print(f"Error: Directory '{DATA_DIR}' not found.")
         return
 
-    # 2. Load Tokenizer (Attempt Rust Acceleration)
+    # 2. Load Tokenizer
     print(f"Loading tokenizer from {TOKENIZER_PATH}...")
     tokenizer = None
-    use_fast = False
-
     try:
         from transformers import PreTrainedTokenizerFast
-        # Try loading as a Fast tokenizer (Rust backend)
         tokenizer = PreTrainedTokenizerFast.from_pretrained(TOKENIZER_PATH)
-        use_fast = True
-        print(">> SUCCESS: Using HuggingFace Fast Tokenizer (Rust-backed). Expect high speeds.")
+        print(">> SUCCESS: Using HuggingFace Fast Tokenizer (Rust-backed).")
     except Exception as e:
-        print(f">> WARNING: Could not load Fast Tokenizer ({e}).")
-        print(">> Falling back to local tokenizer.py (Python-backed). Expect SLOW speeds.")
+        print(f">> WARNING: Could not load Fast Tokenizer ({e}). Falling back to local.")
         try:
             from tokenizer import Tokenizer
             tokenizer = Tokenizer.from_pretrained(TOKENIZER_PATH)
@@ -54,7 +50,6 @@ def prepare():
 
     # Check Vocab Size for Data Type
     vocab_size = tokenizer.vocab_size if hasattr(tokenizer, 'vocab_size') else len(tokenizer)
-    
     if vocab_size < 65535:
         dtype = np.uint16
         print(f"Vocab size is {vocab_size}. Using uint16 (efficient).")
@@ -66,80 +61,80 @@ def prepare():
     eos_id = getattr(tokenizer, 'eos_token_id', None)
     if eos_id is None:
         eos_id = 50256 
-        print(f"Defaulting to GPT-2 standard EOS ID: {eos_id}")
-    else:
-        print(f"Using EOS Token ID: {eos_id}")
+    print(f"Using EOS Token ID: {eos_id}")
 
-    # 4. Gather Files Recursively
-    print(f"Scanning '{DATA_DIR}' and all subdirectories for .txt files...")
+    # 4. Gather Files
     files = sorted(list(DATA_DIR.rglob("*.txt")))
-    
     if not files:
-        print(f"No .txt files found in {DATA_DIR} or its subdirectories.")
+        print(f"No .txt files found in {DATA_DIR}.")
         return
 
     total_size = sum(os.path.getsize(f) for f in files)
-    print(f"Found {len(files)} files. Total raw text size: {total_size / 1024 / 1024:.2f} MB")
+    print(f"Found {len(files)} files. Total size: {total_size / 1024 / 1024:.2f} MB")
 
-    token_count = 0
-    
-    # 5. Processing Loop
+    # 5. Processing Loop (STREAMING)
     print(f"Writing to {OUTPUT_FILE}...")
-    
-    # We create a buffer to avoid writing to disk for every single file (speeds up HDD IO)
+    token_count = 0
     buffer = []
-    BUFFER_SIZE = 100_000 # Flush every 100k tokens
+    BUFFER_FLUSH_SIZE = 500_000 # Flush to disk every 500k tokens
+    
+    # We aggregate text into small chunks to speed up tokenization calls
+    # without blowing up RAM.
+    TEXT_CHUNK_SIZE = 1024 * 1024 * 5 # Process 5MB of text at a time
     
     with open(OUTPUT_FILE, "wb") as f_out:
         with tqdm(total=total_size, unit="B", unit_scale=True, desc="Tokenizing") as pbar:
             for file_path in files:
                 try:
-                    pbar.set_description(f"Processing {file_path.name[:20]}")
+                    pbar.set_description(f"Proc {file_path.name[:15]}")
                     
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f_in:
-                        text = f_in.read()
+                        text_accumulator = []
+                        current_acc_size = 0
+                        
+                        for line in f_in:
+                            line_len = len(line.encode('utf-8'))
+                            text_accumulator.append(line)
+                            current_acc_size += line_len
+                            
+                            # If accumulator is full, tokenize it
+                            if current_acc_size >= TEXT_CHUNK_SIZE:
+                                text_block = "".join(text_accumulator)
+                                ids = tokenizer.encode(text_block, add_special_tokens=False)
+                                buffer.extend(ids)
+                                token_count += len(ids)
+                                pbar.update(current_acc_size)
+                                
+                                # Reset accumulator
+                                text_accumulator = []
+                                current_acc_size = 0
+                                
+                                # Flush buffer to disk if full
+                                if len(buffer) >= BUFFER_FLUSH_SIZE:
+                                    f_out.write(np.array(buffer, dtype=dtype).tobytes())
+                                    buffer = []
+
+                        # Process remaining lines in this file
+                        if text_accumulator:
+                            text_block = "".join(text_accumulator)
+                            ids = tokenizer.encode(text_block, add_special_tokens=False)
+                            buffer.extend(ids)
+                            token_count += len(ids)
+                            pbar.update(current_acc_size)
                     
-                    if not text.strip():
-                        pbar.update(len(text.encode('utf-8')))
-                        continue
-
-                    # Encode
-                    if use_fast:
-                        # transformers library returns a list directly usually
-                        encoded = tokenizer.encode(text, add_special_tokens=False)
-                        ids = encoded
-                    else:
-                        # Local tokenizer
-                        encoded = tokenizer.encode(text, add_special_tokens=False)
-                        ids = encoded['input_ids'] if isinstance(encoded, dict) else encoded
-
-                    # Append EOS
-                    ids.append(eos_id)
+                    # Add EOS at end of file
+                    buffer.append(eos_id)
+                    token_count += 1
                     
-                    # Add to buffer
-                    buffer.extend(ids)
-                    token_count += len(ids)
-                    
-                    # Flush buffer if full
-                    if len(buffer) >= BUFFER_SIZE:
-                        arr = np.array(buffer, dtype=dtype)
-                        f_out.write(arr.tobytes())
-                        buffer = [] # Clear buffer
-
-                    # Update Progress Bar
-                    pbar.update(len(text.encode('utf-8')))
-
                 except Exception as e:
                     print(f"\nError processing {file_path}: {e}")
         
-        # Flush remaining buffer
+        # Final flush
         if buffer:
-            arr = np.array(buffer, dtype=dtype)
-            f_out.write(arr.tobytes())
+            f_out.write(np.array(buffer, dtype=dtype).tobytes())
 
     print(f"\nSuccess! Saved {OUTPUT_FILE}")
     print(f"Total Tokens: {token_count}")
-    print(f"File Size: {os.path.getsize(OUTPUT_FILE) / 1024 / 1024:.2f} MB")
 
 if __name__ == "__main__":
     prepare()
