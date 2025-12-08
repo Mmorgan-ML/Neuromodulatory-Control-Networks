@@ -8,6 +8,8 @@ Instead of merely routing information, NCNs aim to change *how* information is p
 
 ## Architecture and Mechanism
 
+*Note: You may find a trained 18M parameter model checkpoint in releases. It has been trained on 1 epoch of TinyStories and has a validation ppl of 4.5.*
+
 The Neuromodulatory Control Network architecture operates by running a compact neural network in parallel with the main LLM. When the system processes an input sequence, the NCN generates a latent representation (a sequence of $d$-dimensional vectors) that captures the specific "texture" or entropy of the input. During training, the network uses end-to-end gradient modulation to dynamically adjust:
 
 1.  **Attention Precision ($\beta$):** Acting as an inverse temperature control to sharpen or broaden focus.
