@@ -34,7 +34,7 @@ The training run demonstrated high stability with zero gradient explosions, vali
 ![Terminal Output](assets/finishedtraining.png)
 
 ### Sample Efficiency Analysis (SEI)
-A primary advantage of NCNs is **Sample Efficiency**—the ability to learn more generalizable patterns from fewer tokens. We utilized a Sample Efficiency Index (SEI) dashboard to visualize convergence speed.
+A primary advantage of NCNs is **Sample Efficiency**—the ability to learn more generalizable patterns from fewer tokens. We utilized a Sample Efficiency Index (SEI) dashboard to visualize convergence speed. Note: Faster convergence being better is only true if the ending validation perplexity is the same. It is possible that a slower convergence, especially the 99% (Intellectual) convergence being further into the run means that the model was able to continue learning generalizable patterns in the training data for longer without becoming saturated.
 
 **1. Grammar and Syntax (95% Convergence)**
 The model converged on grammatical structure very early in the training run. The Power Law fit (dashed blue line) indicates a steep learning curve, suggesting the modulation allowed the model to find optimal gradients for syntax quickly. However, according to the ongoing ablation study, the situation is more complex. While the Base Transformer learned faster in the initial phases (Steps 0–5000), likely due to the simplicity of its loss surface, the NCN model overtook it significantly around the 60% mark (Step ~9500). Despite having only 1.56% more parameters, the NCN model demonstrates a superior late-stage convergence trajectory, suggesting that the neuromodulatory components allow for finer granularity in loss minimization that a standard Transformer structure struggles to achieve.
